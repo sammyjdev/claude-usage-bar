@@ -1,6 +1,7 @@
 #![allow(dead_code)] // removed in the final task once every module is wired
 
 mod error;
+mod usage;
 
 fn main() {
     match std::env::args().nth(1).as_deref() {
