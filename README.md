@@ -1,5 +1,7 @@
 # Claude Usage Bar
 
+![CI](https://github.com/sammyjdev/claude-usage-bar/actions/workflows/ci.yml/badge.svg)
+
 A small cross-platform **system-tray app** (macOS / Linux / Windows) that shows
 how much of your Claude plan (Pro/Max) you've used — the rolling **5-hour** and
 **weekly** limits — at a glance, without opening anything.
@@ -34,7 +36,27 @@ src/
 [`tao`]: https://crates.io/crates/tao
 [`tray-icon`]: https://crates.io/crates/tray-icon
 
-## Prerequisite (all platforms)
+## Install — download a prebuilt binary (easiest)
+
+No toolchain needed. Grab the latest build for your OS from the
+[**Releases**](https://github.com/sammyjdev/claude-usage-bar/releases) page:
+
+| OS | Asset | After download |
+|----|-------|----------------|
+| macOS | `claude-usage-bar-macos.zip` | unzip → `ClaudeUsageBar.app` |
+| Linux | `claude-usage-bar-linux.tar.gz` | `tar -xzf` → the `claude-usage-bar` binary |
+| Windows | `claude-usage-bar-windows.zip` | unzip → `claude-usage-bar.exe` |
+
+Then jump to your OS section below for the auto-start step (`--install`).
+
+> **Unsigned-app warning.** The binaries are not code-signed, so the first
+> launch is blocked: on **macOS** right-click the app → *Open* → *Open*; on
+> **Windows** click *More info* → *Run anyway*. After the first launch it runs
+> normally.
+
+To build from source instead, follow the steps below.
+
+## Prerequisite — building from source (all platforms)
 
 Install the Rust toolchain via [rustup](https://rustup.rs):
 
