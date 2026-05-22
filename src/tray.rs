@@ -123,7 +123,7 @@ fn apply(
             let level = render::worst_level(u.five_hour.utilization, u.seven_day.utilization);
             let _ = tray.set_icon(Some(icon(level)));
             let _ = tray.set_tooltip(Some(render::tooltip_text(&u)));
-            let _ = tray.set_title(Some(render::title_text(&u)));
+            tray.set_title(Some(render::title_text(&u)));
             let (menu, r, q) = build_menu(Some(&u), None);
             tray.set_menu(Some(Box::new(menu)));
             *refresh_id = Some(r);
@@ -143,7 +143,7 @@ fn apply(
             } else {
                 let _ = tray.set_icon(Some(icon(Level::Grey)));
                 let _ = tray.set_tooltip(Some(note.clone()));
-                let _ = tray.set_title(Some(title));
+                tray.set_title(Some(title));
                 let (menu, r, q) = build_menu(last_usage.as_ref(), Some(&note));
                 tray.set_menu(Some(Box::new(menu)));
                 *refresh_id = Some(r);

@@ -6,8 +6,26 @@ use std::path::PathBuf;
 const LABEL: &str = "com.samdev.claude-usage-bar";
 
 /// Absolute path to the executable that auto-start should launch.
-fn exe_path() -> PathBuf {
-    std::env::current_exe().expect("current exe path is available")
+fn exe_path() -> Option<PathBuf> {
+    match std::env::current_exe() {
+        Ok(p) => Some(p),
+        Err(e) => {
+            eprintln!("could not resolve the executable path: {e}");
+            None
+        }
+    }
+}
+
+/// Home directory, or `None` with a printed message (used by macOS/Linux).
+#[cfg(not(target_os = "windows"))]
+fn home() -> Option<PathBuf> {
+    match dirs::home_dir() {
+        Some(h) => Some(h),
+        None => {
+            eprintln!("could not resolve the home directory");
+            None
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -26,10 +44,15 @@ fn current_uid() -> u32 {
 pub fn install() {
     use std::process::Command;
 
-    let plist_dir = dirs::home_dir().unwrap().join("Library/LaunchAgents");
-    let _ = std::fs::create_dir_all(&plist_dir);
+    let (Some(home), Some(exe)) = (home(), exe_path()) else {
+        return;
+    };
+    let plist_dir = home.join("Library/LaunchAgents");
+    if let Err(e) = std::fs::create_dir_all(&plist_dir) {
+        eprintln!("could not create {}: {e}", plist_dir.display());
+        return;
+    }
     let plist_path = plist_dir.join(format!("{LABEL}.plist"));
-    let exe = exe_path();
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -44,52 +67,74 @@ pub fn install() {
 "#,
         exe.display()
     );
-    std::fs::write(&plist_path, plist).expect("write LaunchAgent plist");
-    let uid = format!("gui/{}", current_uid());
-    let _ = Command::new("launchctl")
-        .args(["bootstrap", &uid, plist_path.to_str().unwrap()])
-        .status();
+    if let Err(e) = std::fs::write(&plist_path, plist) {
+        eprintln!("could not write {}: {e}", plist_path.display());
+        return;
+    }
+    if let Some(p) = plist_path.to_str() {
+        let uid = format!("gui/{}", current_uid());
+        let _ = Command::new("launchctl")
+            .args(["bootstrap", &uid, p])
+            .status();
+    }
     println!("installed: {}", plist_path.display());
 }
 
 #[cfg(target_os = "macos")]
 pub fn uninstall() {
-    let plist_path = dirs::home_dir()
-        .unwrap()
+    let Some(home) = home() else {
+        return;
+    };
+    let plist_path = home
         .join("Library/LaunchAgents")
         .join(format!("{LABEL}.plist"));
-    let uid = format!("gui/{}", current_uid());
-    let _ = std::process::Command::new("launchctl")
-        .args(["bootout", &uid, plist_path.to_str().unwrap()])
-        .status();
+    if let Some(p) = plist_path.to_str() {
+        let uid = format!("gui/{}", current_uid());
+        let _ = std::process::Command::new("launchctl")
+            .args(["bootout", &uid, p])
+            .status();
+    }
     let _ = std::fs::remove_file(&plist_path);
     println!("uninstalled");
 }
 
 #[cfg(target_os = "linux")]
 pub fn install() {
-    let dir = dirs::home_dir().unwrap().join(".config/autostart");
-    let _ = std::fs::create_dir_all(&dir);
+    let (Some(home), Some(exe)) = (home(), exe_path()) else {
+        return;
+    };
+    let dir = home.join(".config/autostart");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("could not create {}: {e}", dir.display());
+        return;
+    }
     let path = dir.join("claude-usage-bar.desktop");
     let entry = format!(
         "[Desktop Entry]\nType=Application\nName=Claude Usage Bar\nExec={}\nX-GNOME-Autostart-enabled=true\n",
-        exe_path().display()
+        exe.display()
     );
-    std::fs::write(&path, entry).expect("write autostart .desktop");
+    if let Err(e) = std::fs::write(&path, entry) {
+        eprintln!("could not write {}: {e}", path.display());
+        return;
+    }
     println!("installed: {}", path.display());
 }
 
 #[cfg(target_os = "linux")]
 pub fn uninstall() {
-    let path = dirs::home_dir()
-        .unwrap()
-        .join(".config/autostart/claude-usage-bar.desktop");
+    let Some(home) = home() else {
+        return;
+    };
+    let path = home.join(".config/autostart/claude-usage-bar.desktop");
     let _ = std::fs::remove_file(&path);
     println!("uninstalled");
 }
 
 #[cfg(target_os = "windows")]
 pub fn install() {
+    let Some(exe) = exe_path() else {
+        return;
+    };
     // HKCU Run key — value name = LABEL, value data = exe path.
     let status = std::process::Command::new("reg")
         .args([
@@ -100,7 +145,7 @@ pub fn install() {
             "/t",
             "REG_SZ",
             "/d",
-            &exe_path().display().to_string(),
+            &exe.display().to_string(),
             "/f",
         ])
         .status();

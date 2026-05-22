@@ -25,7 +25,11 @@ macOS needs the `.app` bundle: a bare binary does not show a menu bar item.
 ## Token source
 
 - **macOS** — Keychain item `Claude Code-credentials`.
-- **Linux / Windows** — `~/.claude/.credentials.json`.
+- **Linux** — `~/.claude/.credentials.json`.
+- **Windows** — assumed `%USERPROFILE%\.claude\.credentials.json`. **Unverified:**
+  the app has so far only been run on macOS. If Claude Code on Windows keeps its
+  token in the Credential Manager / DPAPI instead of a plain file, the icon will
+  show `⚠ token` and `src/token/file.rs` needs a Windows-specific replacement.
 
 If the icon shows `⚠ token`, the token store was not found — confirm Claude
 Code is signed in on this machine.
