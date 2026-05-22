@@ -1,0 +1,217 @@
+use chrono::{DateTime, Datelike, Local, Utc, Weekday};
+
+use crate::usage::{Usage, Window};
+
+/// Colour band for the tray icon, by the fullest window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Level {
+    Green,
+    Orange,
+    Red,
+    Grey,
+}
+
+pub fn level_for(utilization: u32) -> Level {
+    match utilization {
+        0..=49 => Level::Green,
+        50..=79 => Level::Orange,
+        _ => Level::Red,
+    }
+}
+
+pub fn worst_level(five: u32, seven: u32) -> Level {
+    level_for(five.max(seven))
+}
+
+/// "em 3h 12m" / "em 2d 15h" / "em 5m" / "agora" / "—" (unparseable).
+pub fn relative_reset(resets_at: &str, now: DateTime<Utc>) -> String {
+    let Ok(dt) = DateTime::parse_from_rfc3339(resets_at) else {
+        return "—".to_string();
+    };
+    let secs = (dt.with_timezone(&Utc) - now).num_seconds();
+    if secs <= 0 {
+        return "agora".to_string();
+    }
+    let hours = secs / 3600;
+    let mins = (secs % 3600) / 60;
+    if hours >= 24 {
+        // Coarse copy by design: minutes omitted once a day or more away.
+        format!("em {}d {}h", hours / 24, hours % 24)
+    } else if hours > 0 {
+        format!("em {hours}h {mins}m")
+    } else {
+        format!("em {mins}m")
+    }
+}
+
+fn weekday_pt(w: Weekday) -> &'static str {
+    match w {
+        Weekday::Mon => "seg",
+        Weekday::Tue => "ter",
+        Weekday::Wed => "qua",
+        Weekday::Thu => "qui",
+        Weekday::Fri => "sex",
+        Weekday::Sat => "sáb",
+        Weekday::Sun => "dom",
+    }
+}
+
+/// "20:50" or "sáb 07:00" in local time. "—" if unparseable.
+pub fn absolute_reset(resets_at: &str, include_weekday: bool) -> String {
+    let Ok(dt) = DateTime::parse_from_rfc3339(resets_at) else {
+        return "—".to_string();
+    };
+    let local = dt.with_timezone(&Local);
+    if include_weekday {
+        format!("{} {}", weekday_pt(local.weekday()), local.format("%H:%M"))
+    } else {
+        local.format("%H:%M").to_string()
+    }
+}
+
+/// 10-char "▓▓░░░░░░░░" bar, clamped to 0..=100.
+pub fn ascii_bar(utilization: u32) -> String {
+    let width = 10u32;
+    let filled = (((utilization.min(200) as f32) / 100.0) * width as f32).round() as u32;
+    let filled = filled.min(width);
+    "▓".repeat(filled as usize) + &"░".repeat((width - filled) as usize)
+}
+
+pub fn format_credits(v: f64) -> String {
+    if v.fract() == 0.0 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v:.2}")
+    }
+}
+
+/// Side length of the generated tray icon, in pixels.
+pub const ICON_SIZE: usize = 32;
+
+/// A filled circle in the level colour, as RGBA bytes (`ICON_SIZE` square).
+pub fn icon_rgba(level: Level) -> Vec<u8> {
+    let (r, g, b) = match level {
+        Level::Green => (52u8, 199, 89),
+        Level::Orange => (255, 149, 0),
+        Level::Red => (255, 59, 48),
+        Level::Grey => (142, 142, 147),
+    };
+    let mut buf = vec![0u8; ICON_SIZE * ICON_SIZE * 4];
+    let centre = (ICON_SIZE as f32 - 1.0) / 2.0;
+    let radius = ICON_SIZE as f32 / 2.0 - 2.0;
+    for y in 0..ICON_SIZE {
+        for x in 0..ICON_SIZE {
+            let dx = x as f32 - centre;
+            let dy = y as f32 - centre;
+            let i = (y * ICON_SIZE + x) * 4;
+            if dx * dx + dy * dy <= radius * radius {
+                buf[i] = r;
+                buf[i + 1] = g;
+                buf[i + 2] = b;
+                buf[i + 3] = 255;
+            }
+        }
+    }
+    buf
+}
+
+/// Menu-bar / title text (used on macOS).
+pub fn title_text(u: &Usage) -> String {
+    format!(
+        "5h {}% · 7d {}%",
+        u.five_hour.utilization, u.seven_day.utilization
+    )
+}
+
+/// Tooltip text (the at-a-glance line on Windows/Linux).
+pub fn tooltip_text(u: &Usage) -> String {
+    format!("Claude — {}", title_text(u))
+}
+
+/// One detail row: "Janela de 5h   17%   ▓▓░░░░░░░░".
+pub fn window_row(label: &str, w: &Window) -> String {
+    format!("{label}   {}%   {}", w.utilization, ascii_bar(w.utilization))
+}
+
+/// Reset row: "reseta em 3h 12m  ·  20:50". Empty string if no reset time.
+pub fn reset_row(w: &Window, weekday: bool, now: DateTime<Utc>) -> String {
+    match &w.resets_at {
+        Some(r) => format!(
+            "reseta {}  ·  {}",
+            relative_reset(r, now),
+            absolute_reset(r, weekday)
+        ),
+        None => String::new(),
+    }
+}
+
+/// Error note + title-bar text for a failure.
+pub fn error_text(e: &crate::error::WidgetError) -> (String, String) {
+    use crate::error::WidgetError::*;
+    match e {
+        TokenNotFound | TokenMalformed => (
+            "token não encontrado — veja o README".to_string(),
+            "⚠ token".to_string(),
+        ),
+        Auth => (
+            "token expirado — abra o Claude Code pra renovar".to_string(),
+            "⚠ auth".to_string(),
+        ),
+        Network(msg) => (format!("sem conexão ({msg})"), "⚠".to_string()),
+        Format => (
+            "endpoint mudou de formato".to_string(),
+            "⚠ fmt".to_string(),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn level_thresholds() {
+        assert_eq!(level_for(49), Level::Green);
+        assert_eq!(level_for(50), Level::Orange);
+        assert_eq!(level_for(79), Level::Orange);
+        assert_eq!(level_for(80), Level::Red);
+        assert_eq!(worst_level(10, 85), Level::Red);
+    }
+
+    #[test]
+    fn relative_reset_formats() {
+        let now = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let plus = |secs: i64| (now + chrono::Duration::seconds(secs)).to_rfc3339();
+        assert_eq!(relative_reset(&plus(3720), now), "em 1h 2m");
+        assert_eq!(relative_reset(&plus(300), now), "em 5m");
+        assert_eq!(relative_reset(&plus(140_000), now), "em 1d 14h");
+        assert_eq!(relative_reset(&plus(-10), now), "agora");
+        assert_eq!(relative_reset("garbage", now), "—");
+    }
+
+    #[test]
+    fn ascii_bar_fills() {
+        assert_eq!(ascii_bar(0), "░░░░░░░░░░");
+        assert_eq!(ascii_bar(50).matches('▓').count(), 5);
+        assert_eq!(ascii_bar(100), "▓▓▓▓▓▓▓▓▓▓");
+        assert_eq!(ascii_bar(150), "▓▓▓▓▓▓▓▓▓▓");
+    }
+
+    #[test]
+    fn credits_format() {
+        assert_eq!(format_credits(82.0), "82");
+        assert_eq!(format_credits(82.5), "82.50");
+    }
+
+    #[test]
+    fn icon_rgba_shape() {
+        let buf = icon_rgba(Level::Green);
+        assert_eq!(buf.len(), ICON_SIZE * ICON_SIZE * 4);
+        // Centre pixel is opaque.
+        let c = (ICON_SIZE / 2 * ICON_SIZE + ICON_SIZE / 2) * 4;
+        assert_eq!(buf[c + 3], 255);
+        // Top-left corner is transparent (outside the circle).
+        assert_eq!(buf[3], 0);
+    }
+}

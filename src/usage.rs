@@ -1,9 +1,17 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::error::WidgetError;
 
+/// The endpoint reports `utilization` as a float (e.g. `86.0`); round to a
+/// whole percent.
+fn de_utilization<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = f64::deserialize(d)?;
+    Ok(v.round().max(0.0) as u32)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Window {
+    #[serde(deserialize_with = "de_utilization")]
     pub utilization: u32,
     pub resets_at: Option<String>,
 }
