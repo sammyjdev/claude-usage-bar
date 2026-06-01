@@ -1,5 +1,10 @@
 # Claude Usage Bar (Rust, cross-platform) Implementation Plan
 
+> **Superseded in part (2026-06-01):** the `client.rs`/`token/` + `api/oauth/usage`
+> endpoint described below were removed. The data source is now the parsing of the
+> local JSONL logs (`src/logs.rs`), due to a violation of Anthropic's Usage Policy.
+> See `docs/superpowers/adr-2026-06-01-local-logs-over-oauth-endpoint.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a cross-platform (macOS/Linux/Windows) system-tray app in Rust that shows Claude plan (Pro/Max) usage against the 5h and weekly limits.

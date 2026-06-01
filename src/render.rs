@@ -23,47 +23,47 @@ pub fn worst_level(five: u32, seven: u32) -> Level {
     level_for(five.max(seven))
 }
 
-/// "em 3h 12m" / "em 2d 15h" / "em 5m" / "agora" / "—" (unparseable).
+/// "in 3h 12m" / "in 2d 15h" / "in 5m" / "now" / "-" (unparseable).
 pub fn relative_reset(resets_at: &str, now: DateTime<Utc>) -> String {
     let Ok(dt) = DateTime::parse_from_rfc3339(resets_at) else {
-        return "—".to_string();
+        return "-".to_string();
     };
     let secs = (dt.with_timezone(&Utc) - now).num_seconds();
     if secs <= 0 {
-        return "agora".to_string();
+        return "now".to_string();
     }
     let hours = secs / 3600;
     let mins = (secs % 3600) / 60;
     if hours >= 24 {
         // Coarse copy by design: minutes omitted once a day or more away.
-        format!("em {}d {}h", hours / 24, hours % 24)
+        format!("in {}d {}h", hours / 24, hours % 24)
     } else if hours > 0 {
-        format!("em {hours}h {mins}m")
+        format!("in {hours}h {mins}m")
     } else {
-        format!("em {mins}m")
+        format!("in {mins}m")
     }
 }
 
-fn weekday_pt(w: Weekday) -> &'static str {
+fn weekday_en(w: Weekday) -> &'static str {
     match w {
-        Weekday::Mon => "seg",
-        Weekday::Tue => "ter",
-        Weekday::Wed => "qua",
-        Weekday::Thu => "qui",
-        Weekday::Fri => "sex",
-        Weekday::Sat => "sáb",
-        Weekday::Sun => "dom",
+        Weekday::Mon => "Mon",
+        Weekday::Tue => "Tue",
+        Weekday::Wed => "Wed",
+        Weekday::Thu => "Thu",
+        Weekday::Fri => "Fri",
+        Weekday::Sat => "Sat",
+        Weekday::Sun => "Sun",
     }
 }
 
-/// "20:50" or "sáb 07:00" in local time. "—" if unparseable.
+/// "20:50" or "Sat 07:00" in local time. "-" if unparseable.
 pub fn absolute_reset(resets_at: &str, include_weekday: bool) -> String {
     let Ok(dt) = DateTime::parse_from_rfc3339(resets_at) else {
-        return "—".to_string();
+        return "-".to_string();
     };
     let local = dt.with_timezone(&Local);
     if include_weekday {
-        format!("{} {}", weekday_pt(local.weekday()), local.format("%H:%M"))
+        format!("{} {}", weekday_en(local.weekday()), local.format("%H:%M"))
     } else {
         local.format("%H:%M").to_string()
     }
@@ -77,11 +77,14 @@ pub fn ascii_bar(utilization: u32) -> String {
     "▓".repeat(filled as usize) + &"░".repeat((width - filled) as usize)
 }
 
-pub fn format_credits(v: f64) -> String {
-    if v.fract() == 0.0 {
-        format!("{}", v as i64)
+/// "1.2M" / "18.3M" / "523k" / "742". Compact token count for the tray.
+pub fn format_tokens(t: u64) -> String {
+    if t >= 1_000_000 {
+        format!("{:.1}M", t as f64 / 1_000_000.0)
+    } else if t >= 1_000 {
+        format!("{:.0}k", t as f64 / 1_000.0)
     } else {
-        format!("{v:.2}")
+        t.to_string()
     }
 }
 
@@ -115,29 +118,40 @@ pub fn icon_rgba(level: Level) -> Vec<u8> {
     buf
 }
 
+/// A window's headline value: a real percent when calibrated, otherwise the
+/// raw token count (no fake confident percent before calibration).
+pub fn window_value(w: &Window) -> String {
+    if w.calibrated {
+        format!("{}%", w.pct)
+    } else {
+        format!("{} tok", format_tokens(w.tokens))
+    }
+}
+
 /// Menu-bar / title text (used on macOS).
 pub fn title_text(u: &Usage) -> String {
     format!(
-        "5h {}% · 7d {}%",
-        u.five_hour.utilization, u.seven_day.utilization
+        "5h {} · 7d {}",
+        window_value(&u.five_hour),
+        window_value(&u.seven_day)
     )
 }
 
 /// Tooltip text (the at-a-glance line on Windows/Linux).
 pub fn tooltip_text(u: &Usage) -> String {
-    format!("Claude — {}", title_text(u))
+    format!("Claude · {}", title_text(u))
 }
 
-/// One detail row: "Janela de 5h   17%   ▓▓░░░░░░░░".
+/// One detail row: "5h window   86%   ▓▓░░░░░░░░" (or "1.2M tok" uncalibrated).
 pub fn window_row(label: &str, w: &Window) -> String {
-    format!("{label}   {}%   {}", w.utilization, ascii_bar(w.utilization))
+    format!("{label}   {}   {}", window_value(w), ascii_bar(w.pct))
 }
 
-/// Reset row: "reseta em 3h 12m  ·  20:50". Empty string if no reset time.
+/// Reset row: "resets in 3h 12m  ·  20:50". Empty string if no reset time.
 pub fn reset_row(w: &Window, weekday: bool, now: DateTime<Utc>) -> String {
     match &w.resets_at {
         Some(r) => format!(
-            "reseta {}  ·  {}",
+            "resets {}  ·  {}",
             relative_reset(r, now),
             absolute_reset(r, weekday)
         ),
@@ -149,18 +163,9 @@ pub fn reset_row(w: &Window, weekday: bool, now: DateTime<Utc>) -> String {
 pub fn error_text(e: &crate::error::WidgetError) -> (String, String) {
     use crate::error::WidgetError::*;
     match e {
-        TokenNotFound | TokenMalformed => (
-            "token não encontrado — veja o README".to_string(),
-            "⚠ token".to_string(),
-        ),
-        Auth => (
-            "token expirado — abra o Claude Code pra renovar".to_string(),
-            "⚠ auth".to_string(),
-        ),
-        Network(msg) => (format!("sem conexão ({msg})"), "⚠".to_string()),
-        Format => (
-            "endpoint mudou de formato".to_string(),
-            "⚠ fmt".to_string(),
+        LogsNotFound => (
+            "Claude Code logs not found, see the README".to_string(),
+            "⚠ logs".to_string(),
         ),
     }
 }
@@ -183,11 +188,11 @@ mod tests {
     fn relative_reset_formats() {
         let now = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
         let plus = |secs: i64| (now + chrono::Duration::seconds(secs)).to_rfc3339();
-        assert_eq!(relative_reset(&plus(3720), now), "em 1h 2m");
-        assert_eq!(relative_reset(&plus(300), now), "em 5m");
-        assert_eq!(relative_reset(&plus(140_000), now), "em 1d 14h");
-        assert_eq!(relative_reset(&plus(-10), now), "agora");
-        assert_eq!(relative_reset("garbage", now), "—");
+        assert_eq!(relative_reset(&plus(3720), now), "in 1h 2m");
+        assert_eq!(relative_reset(&plus(300), now), "in 5m");
+        assert_eq!(relative_reset(&plus(140_000), now), "in 1d 14h");
+        assert_eq!(relative_reset(&plus(-10), now), "now");
+        assert_eq!(relative_reset("garbage", now), "-");
     }
 
     #[test]
@@ -199,9 +204,11 @@ mod tests {
     }
 
     #[test]
-    fn credits_format() {
-        assert_eq!(format_credits(82.0), "82");
-        assert_eq!(format_credits(82.5), "82.50");
+    fn tokens_format() {
+        assert_eq!(format_tokens(742), "742");
+        assert_eq!(format_tokens(12_400), "12k");
+        assert_eq!(format_tokens(1_240_000), "1.2M");
+        assert_eq!(format_tokens(18_300_000), "18.3M");
     }
 
     #[test]

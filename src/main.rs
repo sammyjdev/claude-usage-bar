@@ -1,14 +1,15 @@
 mod autostart;
-mod client;
+mod calibration;
 mod error;
+mod logs;
 mod render;
-mod token;
 mod tray;
 mod usage;
 
 fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("--once") => run_once(),
+        Some("--diagnose") => run_diagnose(),
         Some("--selftest") => run_selftest(),
         Some("--install") => autostart::install(),
         Some("--uninstall") => autostart::uninstall(),
@@ -17,34 +18,46 @@ fn main() {
 }
 
 fn run_once() {
-    match client::fetch_usage() {
+    match logs::collect(chrono::Utc::now()) {
         Ok(u) => {
-            println!("5h: {}%", u.five_hour.utilization);
-            println!("7d: {}%", u.seven_day.utilization);
-            println!(
-                "7d sonnet: {}",
-                u.seven_day_sonnet
-                    .map(|w| format!("{}%", w.utilization))
-                    .unwrap_or_else(|| "—".to_string())
-            );
+            println!("5h: {}", render::window_value(&u.five_hour));
+            println!("7d: {}", render::window_value(&u.seven_day));
+            let tok = |w: &usage::Window| format!("{} tok", render::format_tokens(w.tokens));
             println!(
                 "7d opus:   {}",
-                u.seven_day_opus
-                    .map(|w| format!("{}%", w.utilization))
-                    .unwrap_or_else(|| "—".to_string())
+                u.seven_day_opus.as_ref().map(tok).unwrap_or_else(|| "-".to_string())
             );
-            if let Some(ex) = u.extra_usage {
-                println!(
-                    "extra: {} {}",
-                    ex.used_credits.map(render::format_credits).unwrap_or_default(),
-                    ex.currency.unwrap_or_default()
-                );
-            }
+            println!(
+                "7d sonnet: {}",
+                u.seven_day_sonnet.as_ref().map(tok).unwrap_or_else(|| "-".to_string())
+            );
         }
         Err(e) => {
             eprintln!("error: {e:?}");
             std::process::exit(1);
         }
+    }
+}
+
+/// Report what was found in the logs, for support and for contributors sending
+/// limit-event samples from other plans, locales, and Claude Code versions.
+fn run_diagnose() {
+    let d = logs::diagnose(chrono::Utc::now());
+    println!("logs dir:      {}", d.dir.as_deref().unwrap_or("NOT FOUND"));
+    println!("files (<=7d):  {}", d.files);
+    println!("usage events:  {}", d.usage_events);
+    println!("malformed:     {}", d.malformed);
+    println!("limit events:  {}", d.limit_events.len());
+    for (kind, ts, reset) in &d.limit_events {
+        println!("  - {ts}  {kind}  resets {}", reset.as_deref().unwrap_or("?"));
+    }
+    match d.calibration.five_hour_limit {
+        Some(limit) => println!(
+            "5h calibration: {} tok (learned {})",
+            render::format_tokens(limit),
+            d.calibration.five_hour_updated.as_deref().unwrap_or("?")
+        ),
+        None => println!("5h calibration: not calibrated (no session-limit hit seen yet)"),
     }
 }
 

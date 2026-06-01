@@ -9,8 +9,8 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-use crate::client::fetch_usage;
 use crate::error::WidgetError;
+use crate::logs::collect;
 use crate::render::{self, Level};
 use crate::usage::Usage;
 
@@ -20,15 +20,21 @@ enum UserEvent {
     Poll(Result<Usage, WidgetError>),
 }
 
-const POLL_INTERVAL: Duration = Duration::from_secs(300);
+// Reading local logs is cheap, so we poll more often than the old 5min network call.
+const POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 fn icon(level: Level) -> Icon {
-    Icon::from_rgba(
+    match Icon::from_rgba(
         render::icon_rgba(level),
         render::ICON_SIZE as u32,
         render::ICON_SIZE as u32,
-    )
-    .expect("icon_rgba always yields a valid RGBA buffer")
+    ) {
+        Ok(icon) => icon,
+        Err(e) => {
+            eprintln!("fatal: could not build tray icon: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Wake the macOS run loop so tray changes draw immediately. No-op elsewhere.
@@ -53,13 +59,13 @@ fn build_menu(usage: Option<&Usage>, error_note: Option<&str>) -> (Menu, MenuId,
     let now = chrono::Utc::now();
 
     if let Some(u) = usage {
-        let _ = menu.append(&disabled(&render::window_row("Janela de 5h", &u.five_hour)));
+        let _ = menu.append(&disabled(&render::window_row("5h window", &u.five_hour)));
         let reset5 = render::reset_row(&u.five_hour, false, now);
         if !reset5.is_empty() {
             let _ = menu.append(&disabled(&reset5));
         }
         let _ = menu.append(&PredefinedMenuItem::separator());
-        let _ = menu.append(&disabled(&render::window_row("Semanal (7d)", &u.seven_day)));
+        let _ = menu.append(&disabled(&render::window_row("Weekly (7d)", &u.seven_day)));
         let reset7 = render::reset_row(&u.seven_day, true, now);
         if !reset7.is_empty() {
             let _ = menu.append(&disabled(&reset7));
@@ -69,28 +75,15 @@ fn build_menu(usage: Option<&Usage>, error_note: Option<&str>) -> (Menu, MenuId,
         let sonnet = u
             .seven_day_sonnet
             .as_ref()
-            .map(|w| format!("{}%", w.utilization))
-            .unwrap_or_else(|| "—".to_string());
+            .map(|w| format!("{} tok", render::format_tokens(w.tokens)))
+            .unwrap_or_else(|| "-".to_string());
         let opus = u
             .seven_day_opus
             .as_ref()
-            .map(|w| format!("{}%", w.utilization))
-            .unwrap_or_else(|| "—".to_string());
-        let _ = menu.append(&disabled(&format!("Semanal · Sonnet   {sonnet}")));
-        let _ = menu.append(&disabled(&format!("Semanal · Opus     {opus}")));
-
-        if let Some(ex) = &u.extra_usage {
-            if ex.is_enabled {
-                let credits = ex
-                    .used_credits
-                    .map(render::format_credits)
-                    .unwrap_or_else(|| "—".to_string());
-                let currency = ex.currency.clone().unwrap_or_default();
-                let _ = menu.append(&disabled(&format!(
-                    "Uso extra          {credits} créditos ({currency})"
-                )));
-            }
-        }
+            .map(|w| format!("{} tok", render::format_tokens(w.tokens)))
+            .unwrap_or_else(|| "-".to_string());
+        let _ = menu.append(&disabled(&format!("Weekly · Sonnet   {sonnet}")));
+        let _ = menu.append(&disabled(&format!("Weekly · Opus     {opus}")));
         let _ = menu.append(&PredefinedMenuItem::separator());
     }
 
@@ -98,8 +91,8 @@ fn build_menu(usage: Option<&Usage>, error_note: Option<&str>) -> (Menu, MenuId,
         let _ = menu.append(&disabled(note));
     }
 
-    let refresh = MenuItem::new("Atualizar agora", true, None);
-    let quit = MenuItem::new("Sair", true, None);
+    let refresh = MenuItem::new("Refresh now", true, None);
+    let quit = MenuItem::new("Quit", true, None);
     let refresh_id = refresh.id().clone();
     let quit_id = quit.id().clone();
     let _ = menu.append(&refresh);
@@ -120,7 +113,7 @@ fn apply(
 
     match result {
         Ok(u) => {
-            let level = render::worst_level(u.five_hour.utilization, u.seven_day.utilization);
+            let level = render::worst_level(u.five_hour.pct, u.seven_day.pct);
             let _ = tray.set_icon(Some(icon(level)));
             let _ = tray.set_tooltip(Some(render::tooltip_text(&u)));
             tray.set_title(Some(render::title_text(&u)));
@@ -132,23 +125,13 @@ fn apply(
         }
         Err(e) => {
             let (note, title) = render::error_text(&e);
-            let keep_last = matches!(e, WidgetError::Network(_)) && last_usage.is_some();
-            if keep_last {
-                // Transient network failure: keep the last good data, just flag it.
-                let _ = tray.set_tooltip(Some(format!("⚠ {note}")));
-                let (menu, r, q) = build_menu(last_usage.as_ref(), Some(&note));
-                tray.set_menu(Some(Box::new(menu)));
-                *refresh_id = Some(r);
-                *quit_id = Some(q);
-            } else {
-                let _ = tray.set_icon(Some(icon(Level::Grey)));
-                let _ = tray.set_tooltip(Some(note.clone()));
-                tray.set_title(Some(title));
-                let (menu, r, q) = build_menu(last_usage.as_ref(), Some(&note));
-                tray.set_menu(Some(Box::new(menu)));
-                *refresh_id = Some(r);
-                *quit_id = Some(q);
-            }
+            let _ = tray.set_icon(Some(icon(Level::Grey)));
+            let _ = tray.set_tooltip(Some(note.clone()));
+            tray.set_title(Some(title));
+            let (menu, r, q) = build_menu(last_usage.as_ref(), Some(&note));
+            tray.set_menu(Some(Box::new(menu)));
+            *refresh_id = Some(r);
+            *quit_id = Some(q);
         }
     }
 }
@@ -167,7 +150,7 @@ pub fn run() -> ! {
     let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
     let poll_proxy = event_loop.create_proxy();
     thread::spawn(move || loop {
-        let result = fetch_usage();
+        let result = collect(chrono::Utc::now());
         if poll_proxy.send_event(UserEvent::Poll(result)).is_err() {
             return; // event loop has shut down
         }
@@ -186,16 +169,22 @@ pub fn run() -> ! {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::NewEvents(StartCause::Init) => {
-                let (menu, r_id, q_id) = build_menu(None, Some("carregando…"));
+                let (menu, r_id, q_id) = build_menu(None, Some("loading…"));
                 refresh_id = Some(r_id);
                 quit_id = Some(q_id);
                 tray = Some(
-                    TrayIconBuilder::new()
+                    match TrayIconBuilder::new()
                         .with_menu(Box::new(menu))
-                        .with_tooltip("Claude — carregando…")
+                        .with_tooltip("Claude · loading…")
                         .with_icon(icon(Level::Grey))
                         .build()
-                        .expect("failed to build tray icon"),
+                    {
+                        Ok(tray) => tray,
+                        Err(e) => {
+                            eprintln!("fatal: could not build tray: {e}");
+                            std::process::exit(1);
+                        }
+                    },
                 );
                 wake_macos();
             }

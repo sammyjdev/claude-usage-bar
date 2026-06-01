@@ -1,26 +1,33 @@
-# Claude Usage Bar (Rust, cross-platform) — Design
+# Claude Usage Bar (Rust, cross-platform) - Design
 
-**Data:** 2026-05-21
-**Status:** Aprovado (brainstorming)
+**Date:** 2026-05-21
+**Status:** Approved (brainstorming)
 
-## Objetivo
+> **Superseded in part (2026-06-01):** the data source is no longer the OAuth
+> token + `api/oauth/usage` endpoint and is now the parsing of the local JSONL
+> logs (`~/.claude/projects/`), due to a violation of Anthropic's Usage Policy.
+> See `docs/superpowers/adr-2026-06-01-local-logs-over-oauth-endpoint.md`.
 
-Reescrever o Claude Usage Bar em Rust como um único codebase cross-platform —
-macOS, Linux e Windows — aposentando o app Swift macOS-only
-(`~/dev/claude-usage-bar/`, que permanece intacto, parado).
+## Objective
 
-Um app de bandeja (system tray / menu bar) que mostra o consumo do plano Claude
-(Pro/Max) contra os limites da assinatura: janela de 5h e limite semanal.
+Rewrite the Claude Usage Bar in Rust as a single cross-platform codebase,
+macOS, Linux, and Windows, retiring the macOS-only Swift app
+(`~/dev/claude-usage-bar/`, which stays intact, paused).
 
-## Pré-requisitos
+A tray app (system tray / menu bar) that shows the consumption of the Claude
+plan (Pro/Max) against the subscription limits: the 5h window and the weekly
+limit.
 
-- Toolchain Rust (`rustup` / `cargo`) instalado em cada máquina onde se vai
-  compilar. Não está instalado na máquina macOS atual — instalar via `rustup`.
-- Linux: bibliotecas de desenvolvimento do GTK (o backend do `tray-icon`/`tao`).
+## Prerequisites
 
-## Fonte de dados
+- Rust toolchain (`rustup` / `cargo`) installed on every machine where it will
+  be compiled. It is not installed on the current macOS machine, install it via
+  `rustup`.
+- Linux: GTK development libraries (the backend for `tray-icon`/`tao`).
 
-Endpoint não-documentado, o mesmo usado pelo `/usage` do Claude Code:
+## Data source
+
+Undocumented endpoint, the same one used by Claude Code's `/usage`:
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
@@ -28,7 +35,7 @@ Authorization: Bearer <oauth-access-token>
 anthropic-beta: oauth-2025-04-20
 ```
 
-Resposta (HTTP 200), formato confirmado em 2026-05-21:
+Response (HTTP 200), format confirmed on 2026-05-21:
 
 ```json
 {
@@ -41,248 +48,251 @@ Resposta (HTTP 200), formato confirmado em 2026-05-21:
 }
 ```
 
-Campos extras (`seven_day_cowork`, `tangelo`, etc.) são ignorados.
+Extra fields (`seven_day_cowork`, `tangelo`, etc.) are ignored.
 
 ## Stack
 
-- `tao` — event loop cross-platform. No Linux é baseado em GTK, que é o que o
-  `tray-icon` precisa. É o event loop que o Tauri usa.
-- `tray-icon` — ícone de bandeja + menu nativo. A crate de bandeja do Tauri.
-- `ureq` — cliente HTTP bloqueante, pequeno, sem runtime async.
-- `serde` + `serde_json` — JSON.
-- `#[cfg]`-gated: macOS não precisa de crate extra (shell out para `security`);
-  Windows pode precisar da crate `windows` (ver "Risco: token no Windows").
+- `tao`: cross-platform event loop. On Linux it is based on GTK, which is what
+  `tray-icon` needs. It is the event loop that Tauri uses.
+- `tray-icon`: tray icon + native menu. Tauri's tray crate.
+- `ureq`: blocking HTTP client, small, no async runtime.
+- `serde` + `serde_json`: JSON.
+- `#[cfg]`-gated: macOS needs no extra crate (shell out to `security`);
+  Windows may need the `windows` crate (see "Risk: token on Windows").
 
-Compilação nativa em cada plataforma (`cargo build --release`). Sem
-cross-compilation — apps de bandeja cross-compilam mal.
+Native compilation on each platform (`cargo build --release`). No
+cross-compilation, tray apps cross-compile poorly.
 
-## Riscos conhecidos
+## Known risks
 
-### Token no Windows (gate de viabilidade)
+### Token on Windows (viability gate)
 
-Onde o Claude Code guarda o token OAuth varia por SO:
+Where Claude Code stores the OAuth token varies by OS:
 
-- **macOS** — Keychain, item `Claude Code-credentials` (confirmado).
-- **Linux** — provavelmente `~/.claude/.credentials.json` em texto puro.
-- **Windows** — incerto: pode ser `%USERPROFILE%\.claude\.credentials.json` ou
-  o Credential Manager / DPAPI.
+- **macOS**: Keychain, item `Claude Code-credentials` (confirmed).
+- **Linux**: probably `~/.claude/.credentials.json` in plain text.
+- **Windows**: uncertain, it could be `%USERPROFILE%\.claude\.credentials.json`
+  or the Credential Manager / DPAPI.
 
-A primeira tarefa do plano de implementação verifica isso numa máquina Linux e
-numa Windows reais. Se no Windows for DPAPI, `token/windows.rs` usa a crate
-`windows` para descriptografar. O risco é isolado num único arquivo; o resto do
-projeto não depende da resposta.
+The first task of the implementation plan verifies this on real Linux and
+Windows machines. If on Windows it is DPAPI, `token/windows.rs` uses the
+`windows` crate to decrypt it. The risk is isolated in a single file; the rest
+of the project does not depend on the answer.
 
-### Endpoint não-documentado
+### Undocumented endpoint
 
-`/api/oauth/usage` pode mudar de formato sem aviso. Falha de decode →
-estado de erro `⚠ fmt`, sem crash.
+`/api/oauth/usage` may change format without notice. Decode failure leads to an
+`⚠ fmt` error state, no crash.
 
-### Bandeja no macOS exige bundle
+### The tray on macOS requires a bundle
 
-Um binário cru não apresenta `NSStatusItem` de forma confiável (lição do app
-Swift). O build macOS empacota o binário num `.app` (`Info.plist` com
-`LSUIElement`). Windows e Linux rodam o executável puro.
+A raw binary does not reliably present an `NSStatusItem` (lesson from the Swift
+app). The macOS build packages the binary into a `.app` (`Info.plist` with
+`LSUIElement`). Windows and Linux run the plain executable.
 
-### Bandeja no Linux é fragmentada
+### The tray on Linux is fragmented
 
-GNOME moderno não tem bandeja por padrão — exige a extensão AppIndicator.
-KDE/XFCE têm. Fora do escopo resolver isso; documentar no README.
+Modern GNOME has no tray by default, it requires the AppIndicator extension.
+KDE/XFCE have it. Solving this is out of scope; document it in the README.
 
-## Arquitetura
+## Architecture
 
-Projeto: `~/dev/claude-usage-bar-rs/`, projeto Cargo.
+Project: `~/dev/claude-usage-bar-rs/`, a Cargo project.
 
 ```
 src/
-  main.rs        — dispatch de CLI (--once/--selftest/--install/--uninstall) ou roda a bandeja
-  error.rs       — enum WidgetError (4 variantes)
-  usage.rs       — structs Usage/Window/ExtraUsage + serde, decode
-  client.rs      — fetch_usage(): GET no endpoint, Result<Usage, WidgetError>
-  render.rs      — puro: cor por nível, formatar reset, barra ASCII, strings, gerar RGBA do ícone
-  tray.rs        — TrayApp: dona do TrayIcon + menu, event loop, fio do polling
-  autostart.rs   — instalar/remover auto-start por SO (#[cfg]-gated)
+  main.rs        - CLI dispatch (--once/--selftest/--install/--uninstall) or run the tray
+  error.rs       - WidgetError enum (4 variants)
+  usage.rs       - Usage/Window/ExtraUsage structs + serde, decode
+  client.rs      - fetch_usage(): GET on the endpoint, Result<Usage, WidgetError>
+  render.rs      - pure: colour by level, format reset, ASCII bar, strings, generate icon RGBA
+  tray.rs        - TrayApp: owns the TrayIcon + menu, event loop, polling thread
+  autostart.rs   - install/remove auto-start per OS (#[cfg]-gated)
   token/
-    mod.rs       — fetch_token() despachado por #[cfg]
-    macos.rs     — Keychain via /usr/bin/security
-    linux.rs     — ~/.claude/.credentials.json
-    windows.rs   — %USERPROFILE%\.claude\.credentials.json (provisório — ver risco)
+    mod.rs       - fetch_token() dispatched by #[cfg]
+    macos.rs     - Keychain via /usr/bin/security
+    linux.rs     - ~/.claude/.credentials.json
+    windows.rs   - %USERPROFILE%\.claude\.credentials.json (provisional - see risk)
 ```
 
-Só `token/*` e `autostart.rs` têm código específico de SO. `usage`, `client`,
-`render`, `error` são totalmente portáveis. `tray` é portável (`tao`/`tray-icon`
-abstraem as plataformas).
+Only `token/*` and `autostart.rs` have OS-specific code. `usage`, `client`,
+`render`, `error` are fully portable. `tray` is portable (`tao`/`tray-icon`
+abstract away the platforms).
 
-### Unidades
+### Units
 
-| Unidade | O que faz | Depende de |
+| Unit | What it does | Depends on |
 |---|---|---|
-| `error::WidgetError` | enum: `TokenNotFound`, `TokenMalformed`, `Auth`, `Network(String)`, `Format` | — |
+| `error::WidgetError` | enum: `TokenNotFound`, `TokenMalformed`, `Auth`, `Network(String)`, `Format` | - |
 | `usage` | structs + `decode_usage(&[u8]) -> Result<Usage, WidgetError>` | `serde` |
-| `token::fetch_token` | obtém o token OAuth do SO atual; lido fresco a cada poll, nunca cacheado | `#[cfg]` impls |
+| `token::fetch_token` | gets the OAuth token from the current OS; read fresh on every poll, never cached | `#[cfg]` impls |
 | `client::fetch_usage` | `fetch_token()` → GET → `decode_usage` → `Usage` | `token`, `usage`, `ureq` |
-| `render` | funções puras: nível de cor, formatação de tempo, geração do ícone RGBA, strings de menu/tooltip/título | `usage` |
-| `tray::TrayApp` | dona do `TrayIcon` + menu; event loop `tao`; recebe resultados do polling e atualiza a bandeja | `tray-icon`, `tao`, `render` |
-| `autostart` | instala/remove auto-start do SO atual | `#[cfg]` |
+| `render` | pure functions: colour level, time formatting, RGBA icon generation, menu/tooltip/title strings | `usage` |
+| `tray::TrayApp` | owns the `TrayIcon` + menu; `tao` event loop; receives polling results and updates the tray | `tray-icon`, `tao`, `render` |
+| `autostart` | installs/removes auto-start for the current OS | `#[cfg]` |
 
-### Fluxo de dados
+### Data flow
 
 ```
-thread de polling: fetch_token() → fetch_usage() → Usage
-   → mpsc channel → thread do event loop (tao user-event)
-   → render → TrayIcon (ícone + tooltip + título + menu)
+polling thread: fetch_token() → fetch_usage() → Usage
+   → mpsc channel → event loop thread (tao user-event)
+   → render → TrayIcon (icon + tooltip + title + menu)
 ```
 
-## Token por plataforma
+## Token per platform
 
-`token::fetch_token() -> Result<String, WidgetError>`, despachado por
-`#[cfg(target_os)]`. Lido fresco a cada poll.
+`token::fetch_token() -> Result<String, WidgetError>`, dispatched by
+`#[cfg(target_os)]`. Read fresh on every poll.
 
-- **macOS** — `/usr/bin/security find-generic-password -s "Claude Code-credentials" -w`,
-  parseia o JSON, extrai `claudeAiOauth.accessToken`.
-- **Linux** — lê `~/.claude/.credentials.json`, parseia, extrai
+- **macOS**: `/usr/bin/security find-generic-password -s "Claude Code-credentials" -w`,
+  parses the JSON, extracts `claudeAiOauth.accessToken`.
+- **Linux**: reads `~/.claude/.credentials.json`, parses it, extracts
   `claudeAiOauth.accessToken`.
-- **Windows** — provisório: lê `%USERPROFILE%\.claude\.credentials.json` do mesmo
-  jeito. Sujeito à verificação (ver "Risco: token no Windows").
+- **Windows**: provisional, reads `%USERPROFILE%\.claude\.credentials.json` the
+  same way. Subject to verification (see "Risk: token on Windows").
 
-Erros: arquivo/Keychain ausente → `TokenNotFound`; JSON inválido ou sem
-`accessToken` → `TokenMalformed`.
+Errors: missing file/Keychain leads to `TokenNotFound`; invalid JSON or no
+`accessToken` leads to `TokenMalformed`.
 
-## Cliente HTTP
+## HTTP client
 
 `client::fetch_usage() -> Result<Usage, WidgetError>`:
 
 1. `token::fetch_token()`.
-2. GET no endpoint via `ureq`, headers `Authorization: Bearer <token>` e
-   `anthropic-beta: oauth-2025-04-20`, timeout de 15s.
-3. Mapeamento: erro de transporte → `Network(String)`; HTTP 401 → `Auth`;
-   não-200 → `Network`; falha de decode → `Format`.
-4. HTTP 200 → `decode_usage` → `Usage`.
+2. GET on the endpoint via `ureq`, headers `Authorization: Bearer <token>` and
+   `anthropic-beta: oauth-2025-04-20`, 15s timeout.
+3. Mapping: transport error leads to `Network(String)`; HTTP 401 leads to
+   `Auth`; non-200 leads to `Network`; decode failure leads to `Format`.
+4. HTTP 200 leads to `decode_usage` leads to `Usage`.
 
-## UI da bandeja
+## Tray UI
 
-### Ícone
+### Icon
 
-Gerado em runtime como RGBA (sem arquivos de asset). Quadrado arredondado
-preenchido com a **cor do nível**, definida pela janela mais cheia entre 5h e 7d:
+Generated at runtime as RGBA (no asset files). A rounded square filled with the
+**level colour**, defined by the fullest window between 5h and 7d:
 
-| Utilização máxima | Cor |
+| Maximum utilization | Colour |
 |---|---|
-| `< 50%` | verde |
-| `50–80%` | laranja |
-| `≥ 80%` | vermelho |
+| `< 50%` | green |
+| `50–80%` | orange |
+| `≥ 80%` | red |
 
-Estado de erro → ícone cinza. Regenerado quando o nível/estado muda.
+Error state leads to a grey icon. Regenerated when the level/state changes.
 `tray_icon::Icon::from_rgba`.
 
-### Título (somente macOS)
+### Title (macOS only)
 
-`set_title("5h 17% · 7d 18%")` — texto puro. No Windows/Linux `set_title` não se
-aplica; lá o ícone colorido é o sinal à primeira vista. Em estado de erro o
-título mostra o aviso (`⚠ token` etc.).
+`set_title("5h 17% · 7d 18%")`: plain text. On Windows/Linux `set_title` does
+not apply; there the coloured icon is the at-a-glance signal. In an error state
+the title shows the warning (`⚠ token`, etc.).
 
-### Tooltip (todas as plataformas)
+### Tooltip (all platforms)
 
-`"Claude — 5h 17% · 7d 18%"` no hover. É o "à primeira vista" exato no Win/Linux.
+`"Claude — 5h 17% · 7d 18%"` on hover. It is the exact "at-a-glance" on
+Windows/Linux.
 
-### Menu (dropdown nativo, todas as plataformas)
+### Menu (native dropdown, all platforms)
 
 ```
-Janela de 5h      17%   ▓▓░░░░░░░░
-reseta em 3h 12m  ·  20:50
+5h window        17%   ▓▓░░░░░░░░
+resets in 3h 12m  ·  20:50
 ─────────────────────────────────
-Semanal (7d)      18%   ▓▓░░░░░░░░
-reseta em 2d 15h  ·  sáb 07:00
+Weekly (7d)      18%   ▓▓░░░░░░░░
+resets in 2d 15h  ·  Sat 07:00
 ─────────────────────────────────
-Semanal · Sonnet   5%
-Semanal · Opus     —
-Uso extra         82 créditos (BRL)
+Weekly · Sonnet   5%
+Weekly · Opus     -
+Extra usage      82 credits (BRL)
 ─────────────────────────────────
-Atualizado às 16:42
-Atualizar agora
-Sair
+Updated at 16:42
+Refresh now
+Quit
 ```
 
-- Linhas per-modelo (`seven_day_sonnet`/`seven_day_opus`): `—` quando o campo é
+- Per-model rows (`seven_day_sonnet`/`seven_day_opus`): `-` when the field is
   `null`.
-- `extra_usage`: linha some quando `is_enabled` é `false`.
-- Itens são texto puro — menus nativos cross-platform não suportam cor por item
-  de forma confiável; o sinal de cor vive no ícone.
-- "Atualizar agora" dispara um poll imediato; "Sair" encerra.
+- `extra_usage`: the row disappears when `is_enabled` is `false`.
+- Items are plain text, native cross-platform menus do not reliably support
+  per-item colour; the colour signal lives in the icon.
+- "Refresh now" triggers an immediate poll; "Quit" exits.
 
-## Comportamento
+## Behaviour
 
 ### Polling
 
-- Thread de fundo: `fetch` → manda resultado pelo canal `mpsc` → dorme 300s.
-- Poll imediato no launch.
-- "Atualizar agora" dispara um fetch extra.
-- O event loop recebe os resultados via user-event do `tao` e atualiza a bandeja.
-- Token relido do SO a cada poll (nunca cacheado).
+- Background thread: `fetch` → sends the result through the `mpsc` channel →
+  sleeps 300s.
+- Immediate poll on launch.
+- "Refresh now" triggers an extra fetch.
+- The event loop receives the results via a `tao` user-event and updates the
+  tray.
+- Token re-read from the OS on every poll (never cached).
 
 ### Wake-from-sleep
 
-Removido de propósito. Detecção de wake cross-platform é complexa e o timer de
-5 min já limita a idade do dado. Simplificação consciente (YAGNI) — é uma
-mudança em relação ao app Swift, que tinha refresh no wake.
+Removed on purpose. Cross-platform wake detection is complex and the 5-minute
+timer already bounds the age of the data. A deliberate simplification (YAGNI),
+it is a change from the Swift app, which had a refresh on wake.
 
-### Estados de erro
+### Error states
 
-Os mesmos 4 do app Swift. O widget nunca apaga o último dado bom por falha
-transitória.
+The same 4 as the Swift app. The widget never erases the last good data on a
+transient failure.
 
-| Situação | Ícone | Título (macOS) / Tooltip / Menu |
+| Situation | Icon | Title (macOS) / Tooltip / Menu |
 |---|---|---|
-| Sem rede / timeout | mantém cor, marca ⚠ | mantém últimos valores; menu: "sem conexão" |
-| HTTP 401 | cinza | `⚠ auth`; "token expirado — abra o Claude Code" |
-| Token ausente / inacessível | cinza | `⚠ token`; instrução por SO |
-| JSON em formato inesperado | cinza | `⚠ fmt`; "endpoint mudou de formato" |
+| No network / timeout | keeps colour, marks ⚠ | keeps the last values; menu: "no connection" |
+| HTTP 401 | grey | `⚠ auth`; "token expired, open Claude Code" |
+| Token missing / inaccessible | grey | `⚠ token`; per-OS instruction |
+| JSON in an unexpected format | grey | `⚠ fmt`; "endpoint format changed" |
 
-## CLI e auto-start
+## CLI and auto-start
 
-`main.rs` despacha por argumento:
+`main.rs` dispatches by argument:
 
-- `--once` — busca e imprime o uso, sai. Verificação portável.
-- `--selftest` — roda asserts internos, sai 0/1.
-- `--install` / `--uninstall` — instala/remove o auto-start do SO atual.
-- sem args — roda a bandeja.
+- `--once`: fetches and prints the usage, exits. Portable check.
+- `--selftest`: runs internal asserts, exits 0/1.
+- `--install` / `--uninstall`: installs/removes auto-start for the current OS.
+- no args: runs the tray.
 
 `autostart` (`#[cfg]`-gated):
 
-- **macOS** — escreve `~/Library/LaunchAgents/com.samdev.claude-usage-bar.plist`,
-  apontando para o executável dentro do `.app`; `launchctl bootstrap`.
-- **Linux** — escreve `~/.config/autostart/claude-usage-bar.desktop` (autostart XDG).
-- **Windows** — adiciona um valor em
+- **macOS**: writes `~/Library/LaunchAgents/com.samdev.claude-usage-bar.plist`,
+  pointing to the executable inside the `.app`; `launchctl bootstrap`.
+- **Linux**: writes `~/.config/autostart/claude-usage-bar.desktop` (XDG autostart).
+- **Windows**: adds a value under
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ## Build
 
-`cargo build --release` nativo em cada SO. No macOS, um script de build empacota
-o binário resultante num `ClaudeUsageBar.app` (`Info.plist` com `LSUIElement`),
-necessário para a bandeja aparecer. Windows e Linux usam o executável direto.
+`cargo build --release` native on each OS. On macOS, a build script packages the
+resulting binary into a `ClaudeUsageBar.app` (`Info.plist` with `LSUIElement`),
+required for the tray to appear. Windows and Linux use the executable directly.
 
-Artefatos de build (binário, `.app`, `target/`) ficam fora do git.
+Build artifacts (binary, `.app`, `target/`) stay out of git.
 
-## Testes / critério de sucesso
+## Tests / success criteria
 
-- `cargo test` — testes unitários dos módulos portáveis:
-  - `usage`: `decode_usage` contra um JSON de amostra (utilizações, `opus` null,
-    `extra_usage`, datas com fração de segundo).
-  - `render`: cor por nível nos limites 49/50/79/80; formatação de reset
-    (relativo/absoluto); seleção de cor do ícone pela janela mais cheia.
-- `--once` — verificação do caminho de dados ao vivo, rodado em cada SO.
-- `--selftest` — smoke test rápido no binário final.
-- UI da bandeja — verificação manual por plataforma.
+- `cargo test`: unit tests of the portable modules:
+  - `usage`: `decode_usage` against a sample JSON (utilizations, `opus` null,
+    `extra_usage`, dates with fractional seconds).
+  - `render`: colour by level at the 49/50/79/80 thresholds; reset formatting
+    (relative/absolute); icon colour selection by the fullest window.
+- `--once`: verification of the live data path, run on each OS.
+- `--selftest`: quick smoke test on the final binary.
+- Tray UI: manual verification per platform.
 
-**Pronto quando:** `cargo test` passa; `--once` retorna dados ao vivo nas 3
-plataformas; ícone colorido + tooltip + menu funcionam em cada SO; auto-start
-instala e funciona em cada SO.
+**Done when:** `cargo test` passes; `--once` returns live data on the 3
+platforms; coloured icon + tooltip + menu work on each OS; auto-start installs
+and works on each OS.
 
-## Fora de escopo (YAGNI)
+## Out of scope (YAGNI)
 
-- Refresh no wake-from-sleep.
-- Histórico / gráficos de uso.
-- Notificações do sistema ao atingir um limite.
-- Configuração via UI (intervalo de poll, thresholds são constantes).
-- Cor por item no menu.
-- Cross-compilation / distribuição de binários prontos — build nativo em cada SO.
-- Resolver a ausência de bandeja no GNOME — apenas documentar.
+- Refresh on wake-from-sleep.
+- Usage history / charts.
+- System notifications when a limit is reached.
+- Configuration via UI (poll interval, thresholds are constants).
+- Per-item colour in the menu.
+- Cross-compilation / distribution of prebuilt binaries, native build on each OS.
+- Solving the absence of a tray on GNOME, just document it.
