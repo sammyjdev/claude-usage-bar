@@ -28,6 +28,11 @@ use crate::usage::{Usage, Window};
 const FIVE_HOURS: i64 = 5 * 3600;
 const SEVEN_DAYS: i64 = 7 * 86400;
 
+/// A learned limit is trusted only this long after the hit that produced it. A
+/// single old sample is noisy and limits are a moving target, so once the
+/// calibration goes stale we revert to showing tokens until the next hit.
+const CALIBRATION_TTL: i64 = SEVEN_DAYS;
+
 /// Heuristic colour caps (tokens), used only when no learned limit exists. NOT
 /// published plan limits; they only scale the tray colour and the ASCII bar
 /// before calibration. The token number shown is always the real count.
@@ -276,14 +281,35 @@ fn block_covering(blocks: &[Block], t: DateTime<Utc>) -> Option<&Block> {
 }
 
 /// Learn the 5h limit from session-limit events: the token sum of the block
-/// active when the limit was hit, taking the most recent hit. Pure.
-fn learn_five_hour(blocks: &[Block], limit_events: &[LimitEvent]) -> Option<(u64, DateTime<Utc>)> {
+/// active when the limit was hit, taking the most recent hit within the TTL.
+/// Pure. Hits older than `CALIBRATION_TTL` are ignored as stale.
+fn learn_five_hour(
+    blocks: &[Block],
+    limit_events: &[LimitEvent],
+    now: DateTime<Utc>,
+) -> Option<(u64, DateTime<Utc>)> {
+    let cutoff = now - Duration::seconds(CALIBRATION_TTL);
     limit_events
         .iter()
         .filter(|e| e.kind == LimitKind::Session)
+        .filter(|e| e.ts >= cutoff)
         .filter_map(|e| block_covering(blocks, e.ts).map(|b| (b.tokens, e.ts)))
         .filter(|(tokens, _)| *tokens > 0)
         .max_by_key(|(_, ts)| *ts)
+}
+
+/// The stored 5h limit, but only if it was learned within `CALIBRATION_TTL`.
+fn fresh_five_hour(cal: &Calibration, now: DateTime<Utc>) -> Option<u64> {
+    let updated = cal
+        .five_hour_updated
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())?
+        .with_timezone(&Utc);
+    if (now - updated).num_seconds() <= CALIBRATION_TTL {
+        cal.five_hour_limit
+    } else {
+        None
+    }
 }
 
 fn make_window(tokens: u64, limit: Option<u64>, cap: u64, resets_at: Option<String>) -> Window {
@@ -424,8 +450,9 @@ fn update_calibration(
     mut cal: Calibration,
     blks: &[Block],
     limit_events: &[LimitEvent],
+    now: DateTime<Utc>,
 ) -> Calibration {
-    if let Some((limit, ts)) = learn_five_hour(blks, limit_events) {
+    if let Some((limit, ts)) = learn_five_hour(blks, limit_events, now) {
         let newer = cal
             .five_hour_updated
             .as_deref()
@@ -454,9 +481,9 @@ pub fn collect(now: DateTime<Utc>) -> Result<Usage, WidgetError> {
 
     let prepared = prepare(scan.events);
     let blks = blocks(&prepared);
-    let cal = update_calibration(calibration::load(), &blks, &scan.limit_events);
+    let cal = update_calibration(calibration::load(), &blks, &scan.limit_events, now);
     let limits = Limits {
-        five_hour: cal.five_hour_limit,
+        five_hour: fresh_five_hour(&cal, now),
         weekly: cal.weekly_limit,
     };
     Ok(aggregate_prepared(&prepared, &blks, now, limits))
@@ -471,6 +498,8 @@ pub struct Diagnostics {
     pub limit_events: Vec<(String, String, Option<String>)>,
     pub malformed: usize,
     pub calibration: Calibration,
+    /// Whether the stored 5h calibration is still within its TTL (drives the UI).
+    pub five_hour_fresh: bool,
 }
 
 pub fn diagnose(now: DateTime<Utc>) -> Diagnostics {
@@ -478,7 +507,7 @@ pub fn diagnose(now: DateTime<Utc>) -> Diagnostics {
         Ok(scan) => {
             let prepared = prepare(scan.events);
             let blks = blocks(&prepared);
-            let cal = update_calibration(calibration::load(), &blks, &scan.limit_events);
+            let cal = update_calibration(calibration::load(), &blks, &scan.limit_events, now);
             let mut limit_events: Vec<_> = scan
                 .limit_events
                 .iter()
@@ -491,17 +520,22 @@ pub fn diagnose(now: DateTime<Utc>) -> Diagnostics {
                 usage_events: prepared.len(),
                 limit_events,
                 malformed: scan.malformed,
+                five_hour_fresh: fresh_five_hour(&cal, now).is_some(),
                 calibration: cal,
             }
         }
-        Err(_) => Diagnostics {
-            dir: None,
-            files: 0,
-            usage_events: 0,
-            limit_events: Vec::new(),
-            malformed: 0,
-            calibration: calibration::load(),
-        },
+        Err(_) => {
+            let cal = calibration::load();
+            Diagnostics {
+                dir: None,
+                files: 0,
+                usage_events: 0,
+                limit_events: Vec::new(),
+                malformed: 0,
+                five_hour_fresh: fresh_five_hour(&cal, now).is_some(),
+                calibration: cal,
+            }
+        }
     }
 }
 
@@ -676,14 +710,29 @@ mod tests {
             ev("2026-05-23T03:00:00Z", "claude-opus-4-8", 300_000, "b", "2"),
         ]);
         let blks = blocks(&events);
-        let limit_events = vec![LimitEvent {
+        let hit = LimitEvent {
             ts: at("2026-05-23T04:25:00Z"),
             kind: LimitKind::Session,
             reset_label: Some("3:20am".into()),
-        }];
-        let learned = learn_five_hour(&blks, &limit_events);
-        // Both events are in the same block (anchored 00:00, within 5h of the hit).
+        };
+        // Fresh hit: both events are in the same block (anchored 00:00).
+        let learned =
+            learn_five_hour(&blks, std::slice::from_ref(&hit), at("2026-05-23T05:00:00Z"));
         assert_eq!(learned.map(|(t, _)| t), Some(1_000_000));
+        // Same hit seen 8 days later is stale and ignored.
+        let stale = learn_five_hour(&blks, &[hit], at("2026-05-31T05:00:00Z"));
+        assert!(stale.is_none());
+    }
+
+    #[test]
+    fn fresh_five_hour_respects_ttl() {
+        let cal = Calibration {
+            five_hour_limit: Some(900_000),
+            five_hour_updated: Some(at("2026-05-23T04:25:00Z").to_rfc3339()),
+            ..Default::default()
+        };
+        assert_eq!(fresh_five_hour(&cal, at("2026-05-25T00:00:00Z")), Some(900_000));
+        assert_eq!(fresh_five_hour(&cal, at("2026-06-01T00:00:00Z")), None);
     }
 
     #[test]

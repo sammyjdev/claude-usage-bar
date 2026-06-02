@@ -53,9 +53,14 @@ fn run_diagnose() {
     }
     match d.calibration.five_hour_limit {
         Some(limit) => println!(
-            "5h calibration: {} tok (learned {})",
+            "5h calibration: {} tok (learned {}){}",
             render::format_tokens(limit),
-            d.calibration.five_hour_updated.as_deref().unwrap_or("?")
+            d.calibration.five_hour_updated.as_deref().unwrap_or("?"),
+            if d.five_hour_fresh {
+                ""
+            } else {
+                " [STALE, showing tokens until the next hit]"
+            }
         ),
         None => println!("5h calibration: not calibrated (no session-limit hit seen yet)"),
     }

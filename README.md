@@ -215,6 +215,11 @@ count at that instant becomes your learned limit, persisted on disk. After the
 first hit the 5h window shows a real **percent** (`5h 78%`); before it, absolute
 **tokens** (`5h 1.8M tok`), never a fake percent.
 
+A learned limit is trusted for **7 days** after the hit. A single old sample is
+noisy and limits move, so once it goes stale the window reverts to tokens until
+your next hit re-calibrates. The percent is therefore most meaningful right after
+you have been throttled, when it is freshest.
+
 **It is passive, and that is why it stays within Anthropic's rules.** The app
 never probes, never calls anything, never spends quota to test, never touches the
 token. It only reads events that already happened while you worked.

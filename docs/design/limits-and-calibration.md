@@ -76,6 +76,12 @@ does not convert: it shows the text as-is.
 4. From then on, `5h % = current_block_tokens / five_hour_limit`. Without
    calibration we fall back to the heuristic cap and mark the window as not
    calibrated.
+5. A learned limit has a **7-day TTL** (`CALIBRATION_TTL`). Samples older than
+   that are ignored when learning, and a stored limit older than that is not
+   used. A single old sample is noisy and limits move, so a stale calibration
+   reverts to the tokens view rather than driving a misleading percent. The
+   percent is therefore freshest right after a throttle, and fades to tokens
+   until the next hit.
 
 Denominator resolution, in order: user manual override (future) -> learned
 limit -> heuristic cap (marked "not calibrated"). The absolute token number is
