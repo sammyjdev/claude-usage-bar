@@ -2,6 +2,10 @@
 
 ![CI](https://github.com/sammyjdev/claude-usage-bar/actions/workflows/ci.yml/badge.svg)
 
+<p align="center">
+  <img src="docs/media/screenshot.png" alt="Claude Usage Bar in the macOS menu bar, showing the 5h and 7d token windows and the dropdown breakdown" width="360">
+</p>
+
 A small cross-platform **system-tray app** (macOS / Linux / Windows) that shows
 your recent Claude Code token usage at a glance, without opening anything. It
 reads Claude Code's own local session logs. It makes **no network calls and
